@@ -72,6 +72,30 @@
         .header-actions {
             display: flex;
             gap: 15px;
+            align-items: center;
+        }
+
+        .user-selector {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 16px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .user-selector:hover {
+            border-color: var(--primary);
+            background: var(--bg-hover);
+        }
+
+        .user-selector:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
         }
 
         /* Stats Dashboard */
@@ -88,6 +112,7 @@
             border-radius: 16px;
             padding: 25px;
             transition: all 0.3s ease;
+            cursor: pointer;
         }
 
         .stat-card:hover {
@@ -511,6 +536,9 @@
         <div class="header-content">
             <div class="logo">📚 Knowledge Base Pro</div>
             <div class="header-actions">
+                <select class="user-selector" id="userSelector" onchange="switchUser()">
+                    <option value="">Loading users...</option>
+                </select>
                 <button class="btn btn-primary" onclick="openNoteModal()">
                     ✍️ New Note
                 </button>
@@ -521,19 +549,19 @@
     <div class="container">
         <!-- Stats Dashboard -->
         <div class="stats-grid" id="stats">
-            <div class="stat-card">
+            <div class="stat-card" id="cardTotalNotes">
                 <div class="stat-value" id="totalNotes">0</div>
                 <div class="stat-label">Total Notes</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="cardNotebooks">
                 <div class="stat-value" id="totalNotebooks">0</div>
                 <div class="stat-label">Notebooks</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="cardPendingReminders">
                 <div class="stat-value" id="pendingReminders">0</div>
                 <div class="stat-label">Pending Reminders</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="cardBookmarks">
                 <div class="stat-value" id="totalBookmarks">0</div>
                 <div class="stat-label">Bookmarks</div>
             </div>
@@ -542,6 +570,7 @@
         <!-- Tabs -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('notes', event)">📝 All Notes</button>
+            <button class="tab" onclick="switchTab('notebooks', event)">📒 Notebooks</button>
             <button class="tab" onclick="switchTab('bookmarks', event)">⭐ Bookmarks</button>
             <button class="tab" onclick="switchTab('reminders', event)">⏰ Reminders</button>
         </div>
@@ -557,6 +586,10 @@
 
         <div id="remindersContent" style="display: none;">
             <div class="reminder-list" id="remindersList"></div>
+        </div>
+
+        <div id="notebooksContent" style="display: none;">
+            <div class="reminder-list" id="notebooksList"></div>
         </div>
     </div>
 
@@ -683,12 +716,35 @@
         document.addEventListener('DOMContentLoaded', () => {
             console.log('App initialized');
             testConnection();
-            loadStats();
-            loadNotes();
-            loadCategories();
-            loadNotebooks();
-            loadUsers();
-            loadAllTags();
+            loadUsers().then(() => {
+                loadStats();
+                loadNotes();
+                loadCategories();
+                loadNotebooks();
+                loadAllTags();
+            });
+
+            // Click handlers for stat cards
+            document.getElementById('cardTotalNotes').addEventListener('click', () => {
+                activateTabButton('notes');
+                showOnly('notesContent');
+                loadNotes();
+            });
+            document.getElementById('cardNotebooks').addEventListener('click', () => {
+                activateTabButton('notebooks');
+                showOnly('notebooksContent');
+                loadNotebooksList();
+            });
+            document.getElementById('cardPendingReminders').addEventListener('click', () => {
+                activateTabButton('reminders');
+                showOnly('remindersContent');
+                loadReminders('pending');
+            });
+            document.getElementById('cardBookmarks').addEventListener('click', () => {
+                activateTabButton('bookmarks');
+                showOnly('bookmarksContent');
+                loadBookmarks();
+            });
         });
 
         // Test database connection
@@ -705,23 +761,28 @@
         // Switch Tabs
         function switchTab(tab, event) {
             currentTab = tab;
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
+            if (event) activateTabButton(tab);
+            showOnly(tab === 'notes' ? 'notesContent' : tab === 'bookmarks' ? 'bookmarksContent' : tab === 'reminders' ? 'remindersContent' : 'notebooksContent');
 
+            if (tab === 'notes') loadNotes();
+            else if (tab === 'bookmarks') loadBookmarks();
+            else if (tab === 'reminders') loadReminders();
+            else if (tab === 'notebooks') loadNotebooksList();
+        }
+
+        function activateTabButton(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            const mapping = { notes: 0, notebooks: 1, bookmarks: 2, reminders: 3 };
+            const tabs = document.querySelectorAll('.tab');
+            if (tabs[mapping[tab]]) tabs[mapping[tab]].classList.add('active');
+        }
+
+        function showOnly(contentId) {
             document.getElementById('notesContent').style.display = 'none';
             document.getElementById('bookmarksContent').style.display = 'none';
             document.getElementById('remindersContent').style.display = 'none';
-
-            if (tab === 'notes') {
-                document.getElementById('notesContent').style.display = 'block';
-                loadNotes();
-            } else if (tab === 'bookmarks') {
-                document.getElementById('bookmarksContent').style.display = 'block';
-                loadBookmarks();
-            } else if (tab === 'reminders') {
-                document.getElementById('remindersContent').style.display = 'block';
-                loadReminders();
-            }
+            document.getElementById('notebooksContent').style.display = 'none';
+            document.getElementById(contentId).style.display = 'block';
         }
 
         // Load Stats
@@ -745,19 +806,26 @@
                 return;
             }
             
-            grid.innerHTML = notes.map(note => `
+            grid.innerHTML = notes.map(note => {
+                const isShared = note.note_type === 'shared';
+                return `
                 <div class="note-card">
                     <div class="note-header">
                         <div style="flex: 1;" onclick="viewNoteDetails(${note.note_id})">
                             <h3 class="note-title">${note.title}</h3>
-                            ${note.category ? `<span class="badge">${note.category}</span>` : ''}
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px;">
+                                ${note.category ? `<span class="badge">${note.category}</span>` : ''}
+                                ${isShared ? `<span class="badge" style="background: rgba(139, 92, 246, 0.3); color: var(--secondary);">👥 Shared</span>` : ''}
+                            </div>
                         </div>
                         <div class="note-actions" onclick="event.stopPropagation()">
                             <button class="icon-btn ${note.is_bookmarked ? 'active' : ''}" 
                                     onclick="toggleBookmark(${note.note_id})" 
                                     title="Bookmark">⭐</button>
-                            <button class="icon-btn" onclick="editNote(${note.note_id})" title="Edit">✏️</button>
-                            <button class="icon-btn" onclick="deleteNote(${note.note_id})" title="Delete">🗑️</button>
+                            ${isShared ? '' : `
+                                <button class="icon-btn" onclick="editNote(${note.note_id})" title="Edit">✏️</button>
+                                <button class="icon-btn" onclick="deleteNote(${note.note_id})" title="Delete">🗑️</button>
+                            `}
                         </div>
                     </div>
                     <p class="note-content" onclick="viewNoteDetails(${note.note_id})">${note.content}</p>
@@ -768,7 +836,8 @@
                         </span>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         // View Note Details
@@ -897,15 +966,23 @@
                 return;
             }
             
-            await fetch(`/api/notes/${viewingNoteId}/share`, {
+            const response = await fetch(`/api/notes/${viewingNoteId}/share`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user_id: parseInt(userId), access_level: accessLevel })
             });
             
+            const result = await response.json();
+            
             document.getElementById('shareForm').style.display = 'none';
             loadCollaborators(viewingNoteId);
-            alert('Note shared successfully!');
+            
+            // Get user name for the message
+            const userSelect = document.getElementById('shareUserId');
+            const selectedOption = userSelect.options[userSelect.selectedIndex];
+            const userName = selectedOption.text.split(' (')[0];
+            
+            alert(`✓ Note shared successfully with ${userName}!\n\nThey will see this note in their notes list when they switch to their account.`);
         }
 
         // Load Categories
@@ -933,6 +1010,57 @@
             const select = document.getElementById('shareUserId');
             select.innerHTML = '<option value="">Select User</option>' +
                 users.map(u => `<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
+            
+            // Also populate user selector in header
+            const userSelector = document.getElementById('userSelector');
+            if (userSelector) {
+                userSelector.innerHTML = users.map(u => 
+                    `<option value="${u.id}">${u.name} (${u.email})</option>`
+                ).join('');
+                
+                // Set current user after populating
+                const currentUserResponse = await fetch('/api/current-user');
+                const currentUser = await currentUserResponse.json();
+                userSelector.value = currentUser.id;
+            }
+        }
+
+        // Load Current User (called separately if needed)
+        async function loadCurrentUser() {
+            const response = await fetch('/api/current-user');
+            const user = await response.json();
+            const userSelector = document.getElementById('userSelector');
+            if (userSelector && userSelector.options.length > 0) {
+                userSelector.value = user.id;
+            }
+        }
+
+        // Switch User
+        async function switchUser() {
+            const userSelector = document.getElementById('userSelector');
+            const userId = parseInt(userSelector.value);
+            
+            if (!userId) return;
+            
+            const response = await fetch('/api/set-user', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: userId })
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                // Reload all data for the new user
+                loadStats();
+                loadNotes();
+                loadNotebooks();
+                loadBookmarks();
+                loadReminders();
+                alert(`✓ Switched to ${result.message}`);
+            } else {
+                alert('Failed to switch user');
+            }
         }
 
         // Load All Tags for Suggestions
@@ -967,8 +1095,9 @@
         }
 
         // Load Reminders
-        async function loadReminders() {
-            const response = await fetch('/api/reminders');
+        async function loadReminders(status) {
+            const url = status ? `/api/reminders?status=${encodeURIComponent(status)}` : '/api/reminders';
+            const response = await fetch(url);
             const reminders = await response.json();
             const list = document.getElementById('remindersList');
             
@@ -988,6 +1117,25 @@
                             ✓ Mark Done
                         </button>
                     ` : '<span class="badge">✓ Completed</span>'}
+                </div>
+            `).join('');
+        }
+
+        // List Notebooks
+        async function loadNotebooksList() {
+            const response = await fetch('/api/notebooks');
+            const notebooks = await response.json();
+            const list = document.getElementById('notebooksList');
+            if (notebooks.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📒</div><p>No notebooks found.</p></div>';
+                return;
+            }
+            list.innerHTML = notebooks.map(n => `
+                <div class="list-item">
+                    <div class="list-item-info">
+                        <h4>${n.title}</h4>
+                        <p>${n.description || ''} • Created ${n.created_at}</p>
+                    </div>
                 </div>
             `).join('');
         }

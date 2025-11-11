@@ -28,18 +28,24 @@ def get_notes():
     user_id = get_current_user()
     cur = mysql.connection.cursor()
     cur.execute("""
-        SELECT n.note_id, n.title, n.content, n.is_public, n.created_at, n.updated_at,
+        SELECT DISTINCT n.note_id, n.title, n.content, n.is_public, n.created_at, n.updated_at,
                c.name as category_name, nb.title as notebook_title,
                GROUP_CONCAT(DISTINCT t.name) as tags,
-               (SELECT COUNT(*) FROM bookmark b WHERE b.note_id = n.note_id AND b.user_id = %s) as is_bookmarked
+               (SELECT COUNT(*) FROM bookmark b WHERE b.note_id = n.note_id AND b.user_id = %s) as is_bookmarked,
+               CASE 
+                    WHEN n.user_id = %s THEN 'owner'
+                    WHEN col.shared_with_user_id = %s THEN 'shared'
+               END as note_type
         FROM note n
+        LEFT JOIN collaboration col ON col.note_id = n.note_id AND col.shared_with_user_id = %s
         LEFT JOIN category c ON n.category_id = c.category_id
         LEFT JOIN notebook nb ON n.notebook_id = nb.notebook_id
         LEFT JOIN note_tag nt ON n.note_id = nt.note_id
         LEFT JOIN tag t ON nt.tag_id = t.tag_id
+        WHERE n.user_id = %s OR col.shared_with_user_id = %s
         GROUP BY n.note_id
         ORDER BY n.updated_at DESC
-    """, (user_id,))
+    """, (user_id, user_id, user_id, user_id, user_id, user_id))
     notes = cur.fetchall()
     cur.close()
     
@@ -55,7 +61,8 @@ def get_notes():
             'category': note[6],
             'notebook': note[7],
             'tags': note[8].split(',') if note[8] else [],
-            'is_bookmarked': bool(note[9])
+            'is_bookmarked': bool(note[9]),
+            'note_type': note[10] if len(note) > 10 and note[10] else 'owner'
         })
     
     return jsonify(notes_list)
@@ -268,6 +275,7 @@ def get_notebooks():
         SELECT notebook_id, title, description, created_at 
         FROM notebook 
         WHERE user_id = %s
+        ORDER BY created_at DESC
     """, (user_id,))
     notebooks = cur.fetchall()
     cur.close()
@@ -288,6 +296,35 @@ def get_users():
     
     return jsonify([{'id': u[0], 'name': u[1], 'email': u[2]} for u in users])
 
+@app.route('/api/current-user')
+def get_current_user_info():
+    user_id = get_current_user()
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT user_id, name, email FROM app_user WHERE user_id = %s", (user_id,))
+    user = cur.fetchone()
+    cur.close()
+    
+    if user:
+        return jsonify({'id': user[0], 'name': user[1], 'email': user[2]})
+    return jsonify({'id': 1, 'name': 'Unknown', 'email': ''})
+
+@app.route('/api/set-user', methods=['POST'])
+def set_current_user():
+    data = request.json
+    user_id = data.get('user_id')
+    
+    if user_id:
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT user_id FROM app_user WHERE user_id = %s", (user_id,))
+        if cur.fetchone():
+            session['user_id'] = user_id
+            cur.close()
+            return jsonify({'message': 'User switched successfully', 'user_id': user_id})
+        cur.close()
+        return jsonify({'error': 'User not found'}), 404
+    
+    return jsonify({'error': 'Invalid user_id'}), 400
+
 @app.route('/api/tags')
 def get_tags():
     cur = mysql.connection.cursor()
@@ -300,14 +337,25 @@ def get_tags():
 @app.route('/api/reminders')
 def get_reminders():
     user_id = get_current_user()
+    status = request.args.get('status')  # e.g., 'pending', 'done', 'skipped'
     cur = mysql.connection.cursor()
-    cur.execute("""
-        SELECT r.reminder_id, r.reminder_text, r.due_date, r.status, n.title, n.note_id
-        FROM reminder r
-        JOIN note n ON r.note_id = n.note_id
-        WHERE r.user_id = %s
-        ORDER BY r.due_date ASC
-    """, (user_id,))
+    
+    if status:
+        cur.execute("""
+            SELECT r.reminder_id, r.reminder_text, r.due_date, r.status, n.title, n.note_id
+            FROM reminder r
+            JOIN note n ON r.note_id = n.note_id
+            WHERE r.user_id = %s AND r.status = %s
+            ORDER BY r.due_date ASC
+        """, (user_id, status))
+    else:
+        cur.execute("""
+            SELECT r.reminder_id, r.reminder_text, r.due_date, r.status, n.title, n.note_id
+            FROM reminder r
+            JOIN note n ON r.note_id = n.note_id
+            WHERE r.user_id = %s
+            ORDER BY r.due_date ASC
+        """, (user_id,))
     reminders = cur.fetchall()
     cur.close()
     
@@ -372,8 +420,8 @@ def get_stats():
     user_id = get_current_user()
     cur = mysql.connection.cursor()
     
-    # Get various statistics
-    cur.execute("SELECT COUNT(*) FROM note", ())
+    # Get various statistics - count only user's own notes
+    cur.execute("SELECT COUNT(*) FROM note WHERE user_id = %s", (user_id,))
     total_notes = cur.fetchone()[0]
     
     cur.execute("SELECT COUNT(*) FROM notebook WHERE user_id = %s", (user_id,))

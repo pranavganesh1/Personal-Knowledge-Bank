@@ -35,7 +35,8 @@ def get_notes():
                CASE 
                     WHEN n.user_id = %s THEN 'owner'
                     WHEN col.shared_with_user_id = %s THEN 'shared'
-               END as note_type
+               END as note_type,
+               COALESCE(col.access_level, 'owner') as access_level
         FROM note n
         LEFT JOIN collaboration col ON col.note_id = n.note_id AND col.shared_with_user_id = %s
         LEFT JOIN category c ON n.category_id = c.category_id
@@ -43,7 +44,7 @@ def get_notes():
         LEFT JOIN note_tag nt ON n.note_id = nt.note_id
         LEFT JOIN tag t ON nt.tag_id = t.tag_id
         WHERE n.user_id = %s OR col.shared_with_user_id = %s
-        GROUP BY n.note_id
+        GROUP BY n.note_id, col.access_level
         ORDER BY n.updated_at DESC
     """, (user_id, user_id, user_id, user_id, user_id, user_id))
     notes = cur.fetchall()
@@ -62,7 +63,8 @@ def get_notes():
             'notebook': note[7],
             'tags': note[8].split(',') if note[8] else [],
             'is_bookmarked': bool(note[9]),
-            'note_type': note[10] if len(note) > 10 and note[10] else 'owner'
+            'note_type': note[10] if len(note) > 10 and note[10] else 'owner',
+            'access_level': note[11] if len(note) > 11 else 'owner'
         })
     
     return jsonify(notes_list)
@@ -131,23 +133,68 @@ def create_note():
 @app.route('/api/notes/<int:note_id>', methods=['PUT'])
 def update_note(note_id):
     data = request.json
+    user_id = get_current_user()
     
     cur = mysql.connection.cursor()
-    # This UPDATE will trigger trg_note_version and trg_notebook_updated
+    
+    # Check if user is owner or has write access
     cur.execute("""
-        UPDATE note 
-        SET title = %s, content = %s, is_public = %s
-        WHERE note_id = %s
-    """, (data['title'], data['content'], data.get('is_public', 0), note_id))
+        SELECT user_id FROM note WHERE note_id = %s
+    """, (note_id,))
+    note_owner = cur.fetchone()
     
-    mysql.connection.commit()
+    if not note_owner:
+        cur.close()
+        return jsonify({'error': 'Note not found'}), 404
+    
+    # If user is owner, allow update
+    if note_owner[0] == user_id:
+        cur.execute("""
+            UPDATE note 
+            SET title = %s, content = %s, is_public = %s
+            WHERE note_id = %s
+        """, (data['title'], data['content'], data.get('is_public', 0), note_id))
+        mysql.connection.commit()
+        cur.close()
+        return jsonify({'message': 'Note updated successfully'})
+    
+    # Check if user has write access via collaboration
+    cur.execute("""
+        SELECT access_level FROM collaboration 
+        WHERE note_id = %s AND shared_with_user_id = %s
+    """, (note_id, user_id))
+    collab = cur.fetchone()
+    
+    if collab and collab[0] in ['write', 'owner']:
+        cur.execute("""
+            UPDATE note 
+            SET title = %s, content = %s, is_public = %s
+            WHERE note_id = %s
+        """, (data['title'], data['content'], data.get('is_public', 0), note_id))
+        mysql.connection.commit()
+        cur.close()
+        return jsonify({'message': 'Note updated successfully'})
+    
     cur.close()
-    
-    return jsonify({'message': 'Note updated successfully'})
+    return jsonify({'error': 'You do not have permission to edit this note'}), 403
 
 @app.route('/api/notes/<int:note_id>', methods=['DELETE'])
 def delete_note(note_id):
+    user_id = get_current_user()
     cur = mysql.connection.cursor()
+    
+    # Check if user is owner (only owners can delete)
+    cur.execute("SELECT user_id FROM note WHERE note_id = %s", (note_id,))
+    note_owner = cur.fetchone()
+    
+    if not note_owner:
+        cur.close()
+        return jsonify({'error': 'Note not found'}), 404
+    
+    if note_owner[0] != user_id:
+        cur.close()
+        return jsonify({'error': 'Only the owner can delete this note'}), 403
+    
     cur.execute("DELETE FROM note WHERE note_id = %s", (note_id,))
     mysql.connection.commit()
     cur.close()

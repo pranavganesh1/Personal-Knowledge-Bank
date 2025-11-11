@@ -807,7 +807,12 @@
             }
             
             grid.innerHTML = notes.map(note => {
+                const isOwner = note.note_type === 'owner';
                 const isShared = note.note_type === 'shared';
+                const hasWriteAccess = note.access_level === 'write' || note.access_level === 'owner';
+                const canEdit = isOwner || (isShared && hasWriteAccess);
+                const canDelete = isOwner; // Only owner can delete
+                
                 return `
                 <div class="note-card">
                     <div class="note-header">
@@ -815,17 +820,19 @@
                             <h3 class="note-title">${note.title}</h3>
                             <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px;">
                                 ${note.category ? `<span class="badge">${note.category}</span>` : ''}
-                                ${isShared ? `<span class="badge" style="background: rgba(139, 92, 246, 0.3); color: var(--secondary);">👥 Shared</span>` : ''}
+                                ${isShared ? `<span class="badge" style="background: rgba(139, 92, 246, 0.3); color: var(--secondary);">👥 Shared (${note.access_level})</span>` : ''}
                             </div>
                         </div>
                         <div class="note-actions" onclick="event.stopPropagation()">
                             <button class="icon-btn ${note.is_bookmarked ? 'active' : ''}" 
                                     onclick="toggleBookmark(${note.note_id})" 
                                     title="Bookmark">⭐</button>
-                            ${isShared ? '' : `
+                            ${canEdit ? `
                                 <button class="icon-btn" onclick="editNote(${note.note_id})" title="Edit">✏️</button>
+                            ` : ''}
+                            ${canDelete ? `
                                 <button class="icon-btn" onclick="deleteNote(${note.note_id})" title="Delete">🗑️</button>
-                            `}
+                            ` : ''}
                         </div>
                     </div>
                     <p class="note-content" onclick="viewNoteDetails(${note.note_id})">${note.content}</p>

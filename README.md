@@ -266,7 +266,7 @@ This is a DBMS Mini Project. For contributions:
 This project is created for educational purposes as part of a DBMS Mini Project.
 
 ## 👨‍💻 Author
-G Pranav Ganesh
+G Pranav Ganesh,
 Aman Kumar Mishra
 
 Created as part of 5th Semester DBMS Mini Project

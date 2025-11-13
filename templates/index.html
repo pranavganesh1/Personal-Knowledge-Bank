@@ -667,8 +667,14 @@
             <div class="section">
                 <div class="section-title">
                     🏷️ AI Tag Suggestions
-                    <button class="btn btn-sm btn-secondary" onclick="showSuggestTagForm()">+ Suggest Tag</button>
+                    <div style="display: flex; gap: 10px; margin-left: auto;">
+                        <button class="btn btn-sm btn-primary" id="aiSuggestBtn" onclick="aiSuggestTags()" style="background: linear-gradient(135deg, #6366f1, #8b5cf6);">
+                            🤖 Auto-Suggest with AI
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="showSuggestTagForm()">+ Manual Suggest</button>
+                    </div>
                 </div>
+                <div id="aiStatus" style="margin-bottom: 15px; padding: 10px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); display: none;"></div>
                 <div id="tagSuggestions"></div>
                 <div id="suggestTagForm" style="display: none; margin-top: 15px;">
                     <div style="display: flex; gap: 10px;">
@@ -866,6 +872,7 @@
             loadNoteHistory(noteId);
             loadTagSuggestions(noteId);
             loadCollaborators(noteId);
+            checkAIStatus(); // Check AI availability when viewing note
             
             document.getElementById('noteDetailsModal').classList.add('active');
         }
@@ -937,6 +944,81 @@
             
             document.getElementById('suggestTagForm').style.display = 'none';
             loadTagSuggestions(viewingNoteId);
+        }
+
+        // AI-Powered Tag Suggestions (Gemini)
+        async function checkAIStatus() {
+            try {
+                const response = await fetch('/api/ai-status');
+                const status = await response.json();
+                const statusDiv = document.getElementById('aiStatus');
+                const aiBtn = document.getElementById('aiSuggestBtn');
+                
+                if (status.available) {
+                    statusDiv.style.display = 'none';
+                    if (aiBtn) aiBtn.disabled = false;
+                } else {
+                    statusDiv.style.display = 'block';
+                    statusDiv.innerHTML = `<span style="color: var(--warning);">⚠️ ${status.message}</span>`;
+                    if (aiBtn) aiBtn.disabled = true;
+                }
+            } catch (error) {
+                console.error('Error checking AI status:', error);
+            }
+        }
+
+        async function aiSuggestTags() {
+            if (!viewingNoteId) {
+                alert('Please open a note first');
+                return;
+            }
+
+            const aiBtn = document.getElementById('aiSuggestBtn');
+            const statusDiv = document.getElementById('aiStatus');
+            
+            // Show loading state
+            const originalText = aiBtn.textContent;
+            aiBtn.disabled = true;
+            aiBtn.textContent = '🤖 Analyzing with AI...';
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<span style="color: var(--primary);">🤖 AI is analyzing your note content...</span>';
+
+            try {
+                const response = await fetch(`/api/notes/${viewingNoteId}/ai-suggest-tags`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    if (result.suggestions && result.suggestions.length > 0) {
+                        statusDiv.innerHTML = `<span style="color: var(--success);">✓ ${result.message}</span>`;
+                        // Reload tag suggestions to show the new ones
+                        loadTagSuggestions(viewingNoteId);
+                        
+                        // Show success message with details
+                        const tagNames = result.suggestions.map(s => s.tag_name).join(', ');
+                        setTimeout(() => {
+                            alert(`✓ AI generated ${result.suggestions.length} tag suggestions:\n\n${tagNames}\n\nCheck the suggestions below!`);
+                        }, 500);
+                    } else {
+                        statusDiv.innerHTML = '<span style="color: var(--text-secondary);">ℹ️ ' + result.message + '</span>';
+                    }
+                } else {
+                    statusDiv.innerHTML = `<span style="color: var(--danger);">✗ ${result.error || 'Error generating suggestions'}</span>`;
+                    if (!result.available) {
+                        alert('AI service is not available. Please set the GEMINI_API_KEY environment variable.\n\nSee README for setup instructions.');
+                    }
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                statusDiv.innerHTML = `<span style="color: var(--danger);">✗ Error: ${error.message}</span>`;
+                alert('Failed to generate AI suggestions. Please try again.');
+            } finally {
+                aiBtn.disabled = false;
+                aiBtn.textContent = originalText;
+            }
         }
 
         // Collaboration (Procedure: share_note)

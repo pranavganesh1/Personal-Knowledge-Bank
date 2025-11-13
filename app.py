@@ -2,15 +2,20 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 from flask_mysqldb import MySQL
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
+from ai_service import get_ai_service
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-here'  # Change this in production
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key-here-change-in-production')
 
-# MySQL Configuration
-app.config['MYSQL_HOST'] = 'localhost'
-app.config['MYSQL_USER'] = 'root'  # Change to your MySQL username
-app.config['MYSQL_PASSWORD'] = 'admin'  # Change to your MySQL password
-app.config['MYSQL_DB'] = 'pkb1'
+# MySQL Configuration (from environment variables or defaults)
+app.config['MYSQL_HOST'] = os.getenv('MYSQL_HOST', 'localhost')
+app.config['MYSQL_USER'] = os.getenv('MYSQL_USER', 'root')
+app.config['MYSQL_PASSWORD'] = os.getenv('MYSQL_PASSWORD', 'admin')
+app.config['MYSQL_DB'] = os.getenv('MYSQL_DB', 'pkb1')
 
 mysql = MySQL(app)
 
@@ -259,6 +264,98 @@ def get_tag_suggestions(note_id):
         'suggested_at': s[4].strftime('%Y-%m-%d %H:%M')
     } for s in suggestions])
 
+# ========== AI-POWERED AUTO TAG SUGGESTION (Gemini) ==========
+@app.route('/api/notes/<int:note_id>/ai-suggest-tags', methods=['POST'])
+def ai_suggest_tags(note_id):
+    """Use Google Gemini AI to automatically suggest tags for a note"""
+    try:
+        # Get the note content
+        cur = mysql.connection.cursor()
+        cur.execute("""
+            SELECT title, content FROM note WHERE note_id = %s
+        """, (note_id,))
+        note = cur.fetchone()
+        
+        if not note:
+            cur.close()
+            return jsonify({'error': 'Note not found'}), 404
+        
+        note_title = note[0] or ""
+        note_content = note[1] or ""
+        
+        # Get existing tags for context
+        cur.execute("SELECT name FROM tag")
+        existing_tags = [row[0] for row in cur.fetchall()]
+        cur.close()
+        
+        # Get AI service instance
+        ai_service = get_ai_service()
+        
+        if not ai_service.is_available():
+            return jsonify({
+                'error': 'AI service not available. Please set GEMINI_API_KEY environment variable.',
+                'available': False
+            }), 503
+        
+        # Get AI suggestions
+        suggestions = ai_service.suggest_tags_with_ai(note_title, note_content, existing_tags)
+        
+        if not suggestions:
+            return jsonify({
+                'message': 'No tag suggestions generated',
+                'suggestions': [],
+                'available': True
+            })
+        
+        # Process suggestions: create tags if they don't exist and add suggestions
+        cur = mysql.connection.cursor()
+        results = []
+        
+        for tag_name, confidence in suggestions:
+            # Create tag if it doesn't exist
+            cur.execute("INSERT IGNORE INTO tag (name) VALUES (%s)", (tag_name,))
+            cur.execute("SELECT tag_id FROM tag WHERE name = %s", (tag_name,))
+            tag_row = cur.fetchone()
+            
+            if tag_row:
+                tag_id = tag_row[0]
+                
+                # Check if suggestion already exists
+                cur.execute("""
+                    SELECT suggestion_id FROM tag_suggestion 
+                    WHERE note_id = %s AND tag_id = %s
+                """, (note_id, tag_id))
+                
+                if not cur.fetchone():
+                    # Add suggestion using the stored procedure
+                    cur.callproc('suggest_tag', [note_id, tag_id, confidence])
+                    results.append({
+                        'tag_name': tag_name,
+                        'tag_id': tag_id,
+                        'confidence': confidence
+                    })
+        
+        mysql.connection.commit()
+        cur.close()
+        
+        return jsonify({
+            'message': f'Generated {len(results)} AI tag suggestions',
+            'suggestions': results,
+            'available': True
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Error generating AI suggestions: {str(e)}'}), 500
+
+@app.route('/api/ai-status')
+def ai_status():
+    """Check if AI service is available"""
+    ai_service = get_ai_service()
+    return jsonify({
+        'available': ai_service.is_available(),
+        'message': 'AI service is ready' if ai_service.is_available() else 'AI service not configured. Set GEMINI_API_KEY environment variable.'
+    })
+
 # ========== PROCEDURE: share_note (Collaboration) ==========
 @app.route('/api/notes/<int:note_id>/share', methods=['POST'])
 def share_note(note_id):
@@ -493,4 +590,18 @@ def get_stats():
     })
 
 if __name__ == '__main__':
+    # Check AI service status on startup
+    ai_service = get_ai_service()
+    if ai_service.is_available():
+        print("✓ AI Service (Gemini) is ready!")
+    else:
+        print("⚠️  AI Service not configured. Set GEMINI_API_KEY in .env file to enable AI tag suggestions.")
+        print("   The app will work with fallback keyword extraction.")
+    
+    print(f"\n📊 Database Configuration:")
+    print(f"   Host: {app.config['MYSQL_HOST']}")
+    print(f"   User: {app.config['MYSQL_USER']}")
+    print(f"   Database: {app.config['MYSQL_DB']}")
+    print(f"\n🚀 Starting server on http://localhost:5000\n")
+    
     app.run(debug=True)

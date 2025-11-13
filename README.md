@@ -12,7 +12,10 @@ A comprehensive Personal Knowledge Base Management System built with Flask and M
 - **🏷️ Tags & Categories**: Categorize and tag notes for better organization
 - **👥 Collaboration**: Share notes with other users with read/write permissions
 - **📜 Version History**: Automatic version tracking when notes are edited
-- **🔍 Smart Tagging**: AI-powered tag suggestions for notes
+- **🔍 Smart Tagging**: AI-powered tag suggestions using Google Gemini AI
+  - Automatic tag generation based on note content analysis
+  - Intelligent tag suggestions with confidence scores
+  - Fallback keyword extraction when AI is unavailable
 
 ### Advanced Features
 - **User Management**: Multi-user support with user switching
@@ -50,8 +53,42 @@ cd "Mini Project"
 
 ### 2. Install Python Dependencies
 ```bash
-pip install flask flask-mysqldb
+pip install -r requirements.txt
 ```
+
+Or manually:
+```bash
+pip install flask flask-mysqldb google-generativeai
+```
+
+### 2.1. Setup Google Gemini AI (Optional but Recommended)
+
+The AI tag suggestion feature uses Google Gemini. To enable it:
+
+1. Get a free API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Set the API key as an environment variable:
+
+**Windows (PowerShell):**
+```powershell
+$env:GEMINI_API_KEY="your-api-key-here"
+```
+
+**Windows (Command Prompt):**
+```cmd
+set GEMINI_API_KEY=your-api-key-here
+```
+
+**Linux/Mac:**
+```bash
+export GEMINI_API_KEY="your-api-key-here"
+```
+
+**Or create a `.env` file** (recommended for development):
+```
+GEMINI_API_KEY=your-api-key-here
+```
+
+**Note:** The app will work without the AI feature, but tag suggestions will use a fallback keyword extraction method.
 
 ### 3. Database Setup
 
@@ -137,7 +174,8 @@ The application will be available at `http://localhost:5000`
 #### 📝 Notes
 - Create and manage notes with categories and tags
 - View version history for edited notes
-- See AI tag suggestions
+- **🤖 AI-Powered Tag Suggestions**: Click "Auto-Suggest with AI" to automatically generate relevant tags using Google Gemini
+- Manual tag suggestions with confidence scores
 - Manage collaborators
 
 #### 📒 Notebooks
@@ -161,6 +199,10 @@ The application will be available at `http://localhost:5000`
 - `POST /api/notes` - Create new note
 - `PUT /api/notes/<id>` - Update note (requires ownership or write access)
 - `DELETE /api/notes/<id>` - Delete note (owner only)
+
+### AI Features
+- `POST /api/notes/<id>/ai-suggest-tags` - Generate AI tag suggestions using Gemini
+- `GET /api/ai-status` - Check if AI service is available
 
 ### Collaboration
 - `POST /api/notes/<id>/share` - Share note with user
@@ -244,14 +286,41 @@ The application will be available at `http://localhost:5000`
 - All timestamps are stored in UTC
 - Public notes are visible to all users (if implemented)
 
+## 🤖 AI Features
+
+### Google Gemini Integration
+
+The application uses Google Gemini AI to provide intelligent tag suggestions:
+
+1. **Automatic Tag Generation**: Analyzes note title and content to suggest relevant tags
+2. **Context-Aware**: Considers existing tags in the system for better suggestions
+3. **Confidence Scores**: Each suggestion includes a confidence score (0.0-1.0)
+4. **Smart Fallback**: Uses keyword extraction when AI is unavailable
+
+### How to Use AI Tag Suggestions
+
+1. Open any note by clicking on it
+2. Scroll to the "🏷️ AI Tag Suggestions" section
+3. Click the "🤖 Auto-Suggest with AI" button
+4. Wait for AI to analyze the content (usually 2-5 seconds)
+5. Review the suggested tags with confidence scores
+6. Tags are automatically added to the suggestions list
+
+### AI Setup
+
+Make sure to set the `GEMINI_API_KEY` environment variable for AI features to work. Without it, the app will use a fallback keyword extraction method.
+
 ## 🔮 Future Enhancements
 
+- [x] AI-powered tag suggestions (✅ Implemented)
 - [ ] File attachments support
 - [ ] Full-text search
 - [ ] Export notes to PDF/Markdown
 - [ ] Mobile app version
 - [ ] Real-time collaboration
 - [ ] Advanced analytics and insights
+- [ ] AI-powered note summarization
+- [ ] Content-based note recommendations
 
 ## 👥 Contributing
 

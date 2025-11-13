@@ -1,0 +1,16 @@
+# Environment Variables Configuration
+# Copy this file to .env and fill in your values
+
+# Google Gemini API Key
+# Get your free API key from: https://makersuite.google.com/app/apikey
+GEMINI_API_KEY=your-api-key-here
+
+# Flask Secret Key (change this in production!)
+FLASK_SECRET_KEY=your-secret-key-change-this-in-production
+
+# MySQL Database Configuration
+MYSQL_HOST=localhost
+MYSQL_USER=root
+MYSQL_PASSWORD=admin
+MYSQL_DB=pkb1
+

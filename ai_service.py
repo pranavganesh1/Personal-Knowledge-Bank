@@ -37,9 +37,43 @@ class AITagSuggestionService:
         
         try:
             genai.configure(api_key=self.api_key)
-            # Use gemini-pro model for text analysis
-            self.model = genai.GenerativeModel('gemini-pro')
-            print("✓ Gemini AI initialized successfully")
+            # Try different model names - Google has changed model names over time
+            model_names = [
+                'gemini-1.5-flash',
+                'gemini-1.5-pro',
+                'gemini-pro',
+                'models/gemini-1.5-flash',
+                'models/gemini-1.5-pro',
+                'models/gemini-pro'
+            ]
+            
+            self.model = None
+            for model_name in model_names:
+                try:
+                    self.model = genai.GenerativeModel(model_name)
+                    print(f"✓ Gemini AI initialized with model: {model_name}")
+                    break
+                except Exception as e:
+                    continue
+            
+            if not self.model:
+                # Last resort: list available models
+                try:
+                    models = genai.list_models()
+                    for model in models:
+                        if 'generateContent' in model.supported_generation_methods:
+                            model_name = model.name.replace('models/', '')
+                            try:
+                                self.model = genai.GenerativeModel(model_name)
+                                print(f"✓ Gemini AI initialized with available model: {model_name}")
+                                break
+                            except:
+                                continue
+                except Exception as e:
+                    print(f"Error listing models: {e}")
+                    
+            if not self.model:
+                print("⚠️  Could not find a compatible Gemini model")
         except Exception as e:
             print(f"Error initializing Gemini: {e}")
             self.model = None

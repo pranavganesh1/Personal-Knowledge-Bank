@@ -559,6 +559,42 @@
             to { transform: rotate(360deg); }
         }
 
+        /* Chatbot Styles */
+        .chat-message {
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            word-wrap: break-word;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+
+        .bot-message {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            align-self: flex-start;
+        }
+
+        .message-content {
+            line-height: 1.6;
+        }
+
+        .message-content ul {
+            color: var(--text-secondary);
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .notes-grid {
@@ -582,6 +618,9 @@
                 <select class="user-selector" id="userSelector" onchange="switchUser()">
                     <option value="">Loading users...</option>
                 </select>
+                <button class="btn btn-secondary" onclick="toggleChatbot()" style="background: linear-gradient(135deg, #8b5cf6, #6366f1);">
+                    🤖 AI Assistant
+                </button>
                 <button class="btn btn-primary" onclick="openNoteModal()">
                     ✍️ New Note
                 </button>
@@ -770,6 +809,36 @@
                         <button class="btn btn-success btn-sm" onclick="shareNote()">Share</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Chatbot Modal -->
+    <div class="modal" id="chatbotModal">
+        <div class="modal-content" style="max-width: 600px; height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 class="modal-title">🤖 AI Assistant</h2>
+                <button class="close-btn" onclick="toggleChatbot()">&times;</button>
+            </div>
+            <div id="chatbotMessages" style="flex: 1; overflow-y: auto; padding: 20px; background: var(--bg-dark); border-radius: 12px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px;">
+                <div class="chat-message bot-message">
+                    <div class="message-content">
+                        👋 Hi! I'm your AI assistant. I can help you:
+                        <ul style="margin-top: 10px; padding-left: 20px;">
+                            <li>Create, edit, and delete notes</li>
+                            <li>Manage notebooks and bookmarks</li>
+                            <li>View reminders and statistics</li>
+                            <li>Share notes with other users</li>
+                            <li>Answer questions about your knowledge base</li>
+                        </ul>
+                        <p style="margin-top: 10px;">Try saying: "Create a note about Python programming" or "Show me my bookmarks"</p>
+                    </div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="chatbotInput" class="form-input" placeholder="Ask me anything or give me a task..." 
+                       style="flex: 1;" onkeypress="if(event.key === 'Enter') sendChatbotMessage()">
+                <button class="btn btn-primary" onclick="sendChatbotMessage()">Send</button>
             </div>
         </div>
     </div>
@@ -1456,6 +1525,118 @@
             loadStats();
             alert('✓ Reminder marked as done! (Procedure: mark_reminder_done)');
         }
+
+        // ========== AI CHATBOT FUNCTIONS ==========
+        function toggleChatbot() {
+            const modal = document.getElementById('chatbotModal');
+            modal.classList.toggle('active');
+            if (modal.classList.contains('active')) {
+                document.getElementById('chatbotInput').focus();
+            }
+        }
+
+        async function sendChatbotMessage() {
+            const input = document.getElementById('chatbotInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            // Add user message to chat
+            addChatMessage(message, 'user');
+            input.value = '';
+            
+            // Show typing indicator
+            const typingId = addChatMessage('Thinking...', 'bot', true);
+            
+            try {
+                const response = await fetch('/api/chatbot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                const result = await response.json();
+                
+                // Remove typing indicator
+                removeChatMessage(typingId);
+                
+                // Add bot response
+                let botMessage = result.message || 'I received your message.';
+                
+                // Add execution result if available
+                if (result.execution_result) {
+                    const execResult = result.execution_result;
+                    if (execResult.success) {
+                        botMessage += `\n\n✅ ${execResult.message || 'Operation completed successfully!'}`;
+                        // Refresh relevant data
+                        if (result.action === 'create_note' || result.action === 'delete_note' || result.action === 'update_note') {
+                            loadNotes();
+                            loadStats();
+                        } else if (result.action === 'create_notebook') {
+                            loadNotebooks();
+                            loadStats();
+                        } else if (result.action === 'bookmark_note' || result.action === 'unbookmark_note') {
+                            loadBookmarks();
+                            loadStats();
+                        }
+                    } else {
+                        botMessage += `\n\n❌ ${execResult.message || 'Operation failed.'}`;
+                    }
+                }
+                
+                addChatMessage(botMessage, 'bot');
+                
+            } catch (error) {
+                removeChatMessage(typingId);
+                addChatMessage(`Sorry, I encountered an error: ${error.message}`, 'bot');
+            }
+        }
+
+        function addChatMessage(message, type, isTyping = false) {
+            const messagesContainer = document.getElementById('chatbotMessages');
+            const messageId = 'msg-' + Date.now() + '-' + Math.random();
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.id = messageId;
+            messageDiv.className = `chat-message ${type}-message`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            if (isTyping) {
+                contentDiv.innerHTML = '<span class="spinner" style="width: 20px; height: 20px; border-width: 2px; display: inline-block; margin-right: 10px;"></span> ' + message;
+            } else {
+                // Convert newlines to <br>
+                contentDiv.innerHTML = message.replace(/\n/g, '<br>');
+            }
+            
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            return messageId;
+        }
+
+        function removeChatMessage(messageId) {
+            const message = document.getElementById(messageId);
+            if (message) {
+                message.remove();
+            }
+        }
+
+        // Allow Enter key to send message
+        document.addEventListener('DOMContentLoaded', () => {
+            const chatbotInput = document.getElementById('chatbotInput');
+            if (chatbotInput) {
+                chatbotInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        sendChatbotMessage();
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>

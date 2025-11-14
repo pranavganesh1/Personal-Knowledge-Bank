@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 from ai_service import get_ai_service
+from chatbot_service import get_chatbot
 
 # Load environment variables from .env file
 load_dotenv()
@@ -637,13 +638,221 @@ def get_stats():
         'total_bookmarks': total_bookmarks
     })
 
+# ========== AI CHATBOT ENDPOINT ==========
+@app.route('/api/chatbot', methods=['POST'])
+def chatbot():
+    """Process chatbot messages and execute operations"""
+    try:
+        data = request.json
+        user_message = data.get('message', '').strip()
+        
+        if not user_message:
+            return jsonify({'error': 'Message is required'}), 400
+        
+        # Get chatbot instance
+        chatbot = get_chatbot(os.getenv('GEMINI_API_KEY'))
+        
+        if not chatbot.is_available():
+            return jsonify({
+                'error': 'Chatbot not available. Please set GEMINI_API_KEY in .env file.',
+                'action': 'answer',
+                'message': 'I\'m sorry, the AI chatbot is not available. Please set GEMINI_API_KEY in your .env file.'
+            }), 503
+        
+        # Gather context for the chatbot
+        user_id = get_current_user()
+        context = {}
+        
+        # Get current user info
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT user_id, name, email FROM app_user WHERE user_id = %s", (user_id,))
+        user = cur.fetchone()
+        if user:
+            context['current_user'] = {'id': user[0], 'name': user[1], 'email': user[2]}
+        
+        # Get available data (limited to avoid overwhelming the AI)
+        cur.execute("SELECT note_id, title FROM note WHERE user_id = %s ORDER BY updated_at DESC LIMIT 10", (user_id,))
+        context['notes'] = [{'id': n[0], 'title': n[1]} for n in cur.fetchall()]
+        
+        cur.execute("SELECT notebook_id, title FROM notebook WHERE user_id = %s LIMIT 10", (user_id,))
+        context['notebooks'] = [{'id': n[0], 'title': n[1]} for n in cur.fetchall()]
+        
+        cur.execute("SELECT category_id, name FROM category LIMIT 10")
+        context['categories'] = [{'id': c[0], 'name': c[1]} for c in cur.fetchall()]
+        
+        cur.execute("SELECT tag_id, name FROM tag LIMIT 20")
+        context['tags'] = [{'id': t[0], 'name': t[1]} for t in cur.fetchall()]
+        
+        cur.execute("SELECT user_id, name, email FROM app_user LIMIT 10")
+        context['users'] = [{'id': u[0], 'name': u[1], 'email': u[2]} for u in cur.fetchall()]
+        
+        cur.close()
+        
+        # Process the message
+        result = chatbot.process_message(user_message, context)
+        
+        # Execute the action if it's an operation
+        execution_result = None
+        if result.get('action') != 'answer' and result.get('action') != 'clarify':
+            execution_result = execute_chatbot_action(result, user_id)
+        
+        # Return response
+        response = {
+            'action': result.get('action', 'answer'),
+            'message': result.get('message', ''),
+            'execution_result': execution_result
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'action': 'answer',
+            'message': f'I encountered an error: {str(e)}. Please try again.'
+        }), 500
+
+def execute_chatbot_action(action_result: dict, user_id: int):
+    """Execute the action determined by the chatbot"""
+    action = action_result.get('action')
+    params = action_result.get('parameters', {})
+    
+    try:
+        cur = mysql.connection.cursor()
+        
+        if action == 'create_note':
+            title = params.get('title', 'Untitled Note')
+            content = params.get('content', '')
+            category_id = params.get('category_id')
+            notebook_id = params.get('notebook_id')
+            tags = params.get('tags', [])
+            is_public = params.get('is_public', False)
+            
+            cur.execute("""
+                INSERT INTO note (user_id, title, content, is_public, category_id, notebook_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (user_id, title, content, 1 if is_public else 0, category_id, notebook_id))
+            
+            note_id = cur.lastrowid
+            
+            # Add tags
+            for tag_name in tags:
+                cur.execute("INSERT IGNORE INTO tag (name) VALUES (%s)", (tag_name,))
+                cur.execute("SELECT tag_id FROM tag WHERE name = %s", (tag_name,))
+                tag_row = cur.fetchone()
+                if tag_row:
+                    tag_id = tag_row[0]
+                    cur.execute("INSERT IGNORE INTO note_tag (note_id, tag_id) VALUES (%s, %s)", (note_id, tag_id))
+            
+            mysql.connection.commit()
+            cur.close()
+            return {'success': True, 'note_id': note_id, 'message': f'Note "{title}" created successfully!'}
+        
+        elif action == 'create_notebook':
+            title = params.get('title', 'Untitled Notebook')
+            description = params.get('description', '')
+            
+            cur.execute("""
+                INSERT INTO notebook (user_id, title, description)
+                VALUES (%s, %s, %s)
+            """, (user_id, title, description))
+            
+            notebook_id = cur.lastrowid
+            mysql.connection.commit()
+            cur.close()
+            return {'success': True, 'notebook_id': notebook_id, 'message': f'Notebook "{title}" created successfully!'}
+        
+        elif action == 'bookmark_note':
+            note_id = params.get('note_id')
+            if note_id:
+                cur.execute("INSERT IGNORE INTO bookmark (note_id, user_id) VALUES (%s, %s)", (note_id, user_id))
+                mysql.connection.commit()
+                cur.close()
+                return {'success': True, 'message': 'Note bookmarked!'}
+        
+        elif action == 'unbookmark_note':
+            note_id = params.get('note_id')
+            if note_id:
+                cur.execute("DELETE FROM bookmark WHERE note_id = %s AND user_id = %s", (note_id, user_id))
+                mysql.connection.commit()
+                cur.close()
+                return {'success': True, 'message': 'Bookmark removed!'}
+        
+        elif action == 'delete_note':
+            note_id = params.get('note_id')
+            if note_id:
+                # Check ownership
+                cur.execute("SELECT user_id FROM note WHERE note_id = %s", (note_id,))
+                note_owner = cur.fetchone()
+                if note_owner and note_owner[0] == user_id:
+                    cur.execute("DELETE FROM note WHERE note_id = %s", (note_id,))
+                    mysql.connection.commit()
+                    cur.close()
+                    return {'success': True, 'message': 'Note deleted successfully!'}
+                else:
+                    cur.close()
+                    return {'success': False, 'message': 'You can only delete your own notes.'}
+        
+        elif action == 'update_note':
+            note_id = params.get('note_id')
+            if note_id:
+                updates = []
+                values = []
+                
+                if 'title' in params:
+                    updates.append("title = %s")
+                    values.append(params['title'])
+                if 'content' in params:
+                    updates.append("content = %s")
+                    values.append(params['content'])
+                if 'is_public' in params:
+                    updates.append("is_public = %s")
+                    values.append(1 if params['is_public'] else 0)
+                
+                if updates:
+                    values.append(note_id)
+                    cur.execute(f"UPDATE note SET {', '.join(updates)} WHERE note_id = %s", tuple(values))
+                    mysql.connection.commit()
+                    cur.close()
+                    return {'success': True, 'message': 'Note updated successfully!'}
+        
+        elif action == 'share_note':
+            note_id = params.get('note_id')
+            shared_user_id = params.get('user_id')
+            access_level = params.get('access_level', 'read')
+            
+            if note_id and shared_user_id:
+                cur.callproc('share_note', [note_id, shared_user_id, access_level])
+                mysql.connection.commit()
+                cur.close()
+                return {'success': True, 'message': f'Note shared with user {shared_user_id}!'}
+        
+        elif action == 'mark_reminder_done':
+            reminder_id = params.get('reminder_id')
+            if reminder_id:
+                cur.callproc('mark_reminder_done', [reminder_id])
+                mysql.connection.commit()
+                cur.close()
+                return {'success': True, 'message': 'Reminder marked as done!'}
+        
+        cur.close()
+        return {'success': False, 'message': f'Action "{action}" not implemented or invalid parameters.'}
+        
+    except Exception as e:
+        return {'success': False, 'message': f'Error executing action: {str(e)}'}
+
 if __name__ == '__main__':
     # Check AI service status on startup
     ai_service = get_ai_service()
-    if ai_service.is_available():
+    chatbot = get_chatbot(os.getenv('GEMINI_API_KEY'))
+    
+    if ai_service.is_available() and chatbot.is_available():
         print("✓ AI Service (Gemini) is ready!")
+        print("✓ AI Chatbot Assistant is ready!")
     else:
-        print("⚠️  AI Service not configured. Set GEMINI_API_KEY in .env file to enable AI tag suggestions.")
+        print("⚠️  AI Service not configured. Set GEMINI_API_KEY in .env file to enable:")
+        print("   - AI tag suggestions")
+        print("   - AI Chatbot Assistant")
         print("   The app will work with fallback keyword extraction.")
     
     print(f"\n📊 Database Configuration:")

@@ -16,6 +16,12 @@ A comprehensive Personal Knowledge Base Management System built with Flask and M
   - Automatic tag generation based on note content analysis
   - Intelligent tag suggestions with confidence scores
   - Fallback keyword extraction when AI is unavailable
+- **🤖 AI Chatbot Assistant**: Intelligent chatbot that can perform operations and answer questions
+  - Natural language interface for all operations
+  - Create, edit, delete notes through conversation
+  - Manage notebooks, bookmarks, and reminders
+  - Answer questions about your knowledge base
+  - Execute tasks using natural language commands
 
 ### Advanced Features
 - **User Management**: Multi-user support with user switching
@@ -31,10 +37,12 @@ A comprehensive Personal Knowledge Base Management System built with Flask and M
 
 ## 🛠️ Tech Stack
 
-- **Backend**: Python 3.x, Flask
-- **Database**: MySQL
+- **Backend**: Python 3.x, Flask 2.3.3
+- **Database**: MySQL 5.7+
 - **Frontend**: HTML5, CSS3, JavaScript (Vanilla)
 - **Database Driver**: Flask-MySQLdb
+- **AI**: Google Gemini API (gemini-1.5-flash/gemini-1.5-pro)
+- **Environment**: python-dotenv for configuration
 
 ## 📋 Prerequisites
 
@@ -58,8 +66,14 @@ pip install -r requirements.txt
 
 Or manually:
 ```bash
-pip install flask flask-mysqldb google-generativeai
+pip install flask flask-mysqldb google-generativeai python-dotenv
 ```
+
+**Note:** The `requirements.txt` includes:
+- Flask 2.3.3 (compatible with Flask-MySQLdb)
+- Flask-MySQLdb 1.0.1
+- google-generativeai 0.3.2 (for AI features)
+- python-dotenv 1.0.0 (for environment variables)
 
 ### 2.1. Setup Google Gemini AI (Optional but Recommended)
 
@@ -86,9 +100,17 @@ export GEMINI_API_KEY="your-api-key-here"
 **Or create a `.env` file** (recommended for development):
 ```
 GEMINI_API_KEY=your-api-key-here
+FLASK_SECRET_KEY=your-secret-key-here
+MYSQL_HOST=localhost
+MYSQL_USER=root
+MYSQL_PASSWORD=admin
+MYSQL_DB=pkb1
 ```
 
-**Note:** The app will work without the AI feature, but tag suggestions will use a fallback keyword extraction method.
+**Note:** 
+- The app will work without the AI feature, but tag suggestions will use a fallback keyword extraction method
+- The chatbot will automatically detect and use available Gemini models
+- See `SETUP_ENV.md` for detailed environment variable setup instructions
 
 ### 3. Database Setup
 
@@ -114,8 +136,16 @@ The database schema includes:
 
 ### 4. Configure Database Connection
 
-Edit `app.py` and update the MySQL configuration:
+**Option 1: Using .env file (Recommended)**
+Create a `.env` file in the project root (see `env_template.txt` for template):
+```
+MYSQL_HOST=localhost
+MYSQL_USER=root
+MYSQL_PASSWORD=admin
+MYSQL_DB=pkb1
+```
 
+**Option 2: Edit app.py directly**
 ```python
 app.config['MYSQL_HOST'] = 'localhost'
 app.config['MYSQL_USER'] = 'root'  # Your MySQL username
@@ -203,6 +233,7 @@ The application will be available at `http://localhost:5000`
 ### AI Features
 - `POST /api/notes/<id>/ai-suggest-tags` - Generate AI tag suggestions using Gemini
 - `GET /api/ai-status` - Check if AI service is available
+- `POST /api/chatbot` - Chat with AI assistant and execute operations
 
 ### Collaboration
 - `POST /api/notes/<id>/share` - Share note with user
@@ -279,6 +310,17 @@ The application will be available at `http://localhost:5000`
 3. **Port Already in Use**
    - Change port in `app.py`: `app.run(debug=True, port=5001)`
 
+4. **AI Model Not Found Error**
+   - The chatbot automatically detects and uses available Gemini models
+   - If you see model errors, make sure your API key is valid
+   - Try upgrading: `pip install --upgrade google-generativeai`
+   - The system will automatically find a working model from your API
+
+5. **Environment Variables Not Loading**
+   - Make sure `.env` file is in the project root (same folder as `app.py`)
+   - Check that `python-dotenv` is installed: `pip install python-dotenv`
+   - Verify `.env` file format (no quotes around values, one per line)
+
 ## 📝 Notes
 
 - Default user is set to user_id = 1 on first load
@@ -287,6 +329,28 @@ The application will be available at `http://localhost:5000`
 - Public notes are visible to all users (if implemented)
 
 ## 🤖 AI Features
+
+### AI Chatbot Assistant
+
+The application includes a powerful AI chatbot powered by Google Gemini that can:
+
+1. **Answer Questions**: Ask questions about your knowledge base, features, or how to use the system
+2. **Perform Operations**: Execute tasks using natural language:
+   - "Create a note about Python programming"
+   - "Show me my bookmarks"
+   - "Delete the note titled 'Meeting Notes'"
+   - "Create a notebook called 'Work Projects'"
+   - "Bookmark note number 5"
+   - "Share note 3 with user 2"
+   - "Mark reminder 1 as done"
+3. **Understand Context**: The chatbot has access to your notes, notebooks, categories, tags, and users
+4. **Natural Language**: No need to remember commands - just talk naturally!
+
+**How to Use:**
+1. Click the "🤖 AI Assistant" button in the header
+2. Type your question or command in natural language
+3. The AI will understand and execute the operation
+4. View the results and continue the conversation
 
 ### Google Gemini Integration
 
@@ -313,6 +377,8 @@ Make sure to set the `GEMINI_API_KEY` environment variable for AI features to wo
 ## 🔮 Future Enhancements
 
 - [x] AI-powered tag suggestions (✅ Implemented)
+- [x] AI Chatbot Assistant (✅ Implemented)
+- [x] Environment variable support with .env file (✅ Implemented)
 - [ ] File attachments support
 - [ ] Full-text search
 - [ ] Export notes to PDF/Markdown

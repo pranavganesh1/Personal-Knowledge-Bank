@@ -431,6 +431,54 @@ def get_notebooks():
         'created_at': n[3].strftime('%Y-%m-%d %H:%M')
     } for n in notebooks])
 
+@app.route('/api/notebooks/<int:notebook_id>/notes')
+def get_notebook_notes(notebook_id):
+    """Return notes inside a specific notebook for the current user (including shared notes)"""
+    user_id = get_current_user()
+    cur = mysql.connection.cursor()
+    cur.execute("""
+        SELECT DISTINCT n.note_id, n.title, n.content, n.is_public, n.created_at, n.updated_at,
+               c.name as category_name, nb.title as notebook_title,
+               GROUP_CONCAT(DISTINCT t.name) as tags,
+               (SELECT COUNT(*) FROM bookmark b WHERE b.note_id = n.note_id AND b.user_id = %s) as is_bookmarked,
+               CASE 
+                    WHEN n.user_id = %s THEN 'owner'
+                    WHEN col.shared_with_user_id = %s THEN 'shared'
+               END as note_type,
+               COALESCE(col.access_level, 'owner') as access_level
+        FROM note n
+        LEFT JOIN collaboration col ON col.note_id = n.note_id AND col.shared_with_user_id = %s
+        LEFT JOIN category c ON n.category_id = c.category_id
+        LEFT JOIN notebook nb ON n.notebook_id = nb.notebook_id
+        LEFT JOIN note_tag nt ON n.note_id = nt.note_id
+        LEFT JOIN tag t ON nt.tag_id = t.tag_id
+        WHERE (n.user_id = %s OR col.shared_with_user_id = %s)
+          AND n.notebook_id = %s
+        GROUP BY n.note_id, col.access_level
+        ORDER BY n.updated_at DESC
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, notebook_id))
+    notes = cur.fetchall()
+    cur.close()
+
+    notes_list = []
+    for note in notes:
+        notes_list.append({
+            'note_id': note[0],
+            'title': note[1],
+            'content': note[2],
+            'is_public': note[3],
+            'created_at': note[4].strftime('%Y-%m-%d %H:%M'),
+            'updated_at': note[5].strftime('%Y-%m-%d %H:%M'),
+            'category': note[6],
+            'notebook': note[7],
+            'tags': note[8].split(',') if note[8] else [],
+            'is_bookmarked': bool(note[9]),
+            'note_type': note[10] if len(note) > 10 and note[10] else 'owner',
+            'access_level': note[11] if len(note) > 11 else 'owner'
+        })
+
+    return jsonify(notes_list)
+
 @app.route('/api/users')
 def get_users():
     cur = mysql.connection.cursor()

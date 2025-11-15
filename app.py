@@ -638,6 +638,527 @@ def get_stats():
         'total_bookmarks': total_bookmarks
     })
 
+# ========== NEW FEATURES: Search, Export, Duplicate, Statistics, Activity Feed ==========
+
+@app.route('/api/notes/search')
+def search_notes():
+    """Full-text search for notes"""
+    user_id = get_current_user()
+    query = request.args.get('q', '').strip()
+    
+    if not query:
+        return jsonify({'error': 'Search query is required'}), 400
+    
+    cur = mysql.connection.cursor()
+    
+    # Search in title and content, including shared notes
+    search_pattern = f'%{query}%'
+    cur.execute("""
+        SELECT DISTINCT n.note_id, n.title, n.content, n.is_public, n.created_at, n.updated_at,
+               c.name as category_name, nb.title as notebook_title,
+               GROUP_CONCAT(DISTINCT t.name) as tags,
+               (SELECT COUNT(*) FROM bookmark b WHERE b.note_id = n.note_id AND b.user_id = %s) as is_bookmarked,
+               CASE 
+                    WHEN n.user_id = %s THEN 'owner'
+                    WHEN col.shared_with_user_id = %s THEN 'shared'
+               END as note_type,
+               COALESCE(col.access_level, 'owner') as access_level
+        FROM note n
+        LEFT JOIN collaboration col ON col.note_id = n.note_id AND col.shared_with_user_id = %s
+        LEFT JOIN category c ON n.category_id = c.category_id
+        LEFT JOIN notebook nb ON n.notebook_id = nb.notebook_id
+        LEFT JOIN note_tag nt ON n.note_id = nt.note_id
+        LEFT JOIN tag t ON nt.tag_id = t.tag_id
+        WHERE (n.user_id = %s OR col.shared_with_user_id = %s)
+          AND (n.title LIKE %s OR n.content LIKE %s)
+        GROUP BY n.note_id, col.access_level
+        ORDER BY 
+            CASE 
+                WHEN n.title LIKE %s THEN 1
+                WHEN n.content LIKE %s THEN 2
+                ELSE 3
+            END,
+            n.updated_at DESC
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, search_pattern, search_pattern, search_pattern, search_pattern))
+    
+    notes = cur.fetchall()
+    cur.close()
+    
+    notes_list = []
+    for note in notes:
+        notes_list.append({
+            'note_id': note[0],
+            'title': note[1],
+            'content': note[2],
+            'is_public': note[3],
+            'created_at': note[4].strftime('%Y-%m-%d %H:%M'),
+            'updated_at': note[5].strftime('%Y-%m-%d %H:%M'),
+            'category': note[6],
+            'notebook': note[7],
+            'tags': note[8].split(',') if note[8] else [],
+            'is_bookmarked': bool(note[9]),
+            'note_type': note[10] if len(note) > 10 and note[10] else 'owner',
+            'access_level': note[11] if len(note) > 11 else 'owner'
+        })
+    
+    return jsonify(notes_list)
+
+@app.route('/api/notes/<int:note_id>/export')
+def export_note(note_id):
+    """Export note to Markdown format"""
+    cur = mysql.connection.cursor()
+    cur.execute("""
+        SELECT n.note_id, n.title, n.content, n.created_at, n.updated_at,
+               c.name as category_name, nb.title as notebook_title,
+               GROUP_CONCAT(DISTINCT t.name) as tags
+        FROM note n
+        LEFT JOIN category c ON n.category_id = c.category_id
+        LEFT JOIN notebook nb ON n.notebook_id = nb.notebook_id
+        LEFT JOIN note_tag nt ON n.note_id = nt.note_id
+        LEFT JOIN tag t ON nt.tag_id = t.tag_id
+        WHERE n.note_id = %s
+        GROUP BY n.note_id
+    """, (note_id,))
+    note = cur.fetchone()
+    cur.close()
+    
+    if not note:
+        return jsonify({'error': 'Note not found'}), 404
+    
+    # Generate Markdown content
+    title = note[1] or 'Untitled Note'
+    content = note[2] or ''
+    created_at = note[3].strftime('%Y-%m-%d %H:%M:%S') if note[3] else ''
+    updated_at = note[4].strftime('%Y-%m-%d %H:%M:%S') if note[4] else ''
+    category = note[5] or ''
+    notebook = note[6] or ''
+    tags = note[7].split(',') if note[7] else []
+    
+    markdown = f"# {title}\n\n"
+    
+    if category or notebook or tags:
+        markdown += "---\n"
+        if category:
+            markdown += f"**Category:** {category}\n"
+        if notebook:
+            markdown += f"**Notebook:** {notebook}\n"
+        if tags:
+            markdown += f"**Tags:** {', '.join(tags)}\n"
+        markdown += "---\n\n"
+    
+    if created_at:
+        markdown += f"*Created: {created_at}*\n"
+    if updated_at and updated_at != created_at:
+        markdown += f"*Updated: {updated_at}*\n"
+    markdown += "\n"
+    
+    markdown += content
+    
+    return jsonify({
+        'markdown': markdown,
+        'filename': f"{title.replace(' ', '_')}_{note_id}.md"
+    })
+
+@app.route('/api/notes/<int:note_id>/duplicate', methods=['POST'])
+def duplicate_note(note_id):
+    """Duplicate/clone a note"""
+    user_id = get_current_user()
+    cur = mysql.connection.cursor()
+    
+    # Get original note
+    cur.execute("""
+        SELECT title, content, is_public, category_id, notebook_id
+        FROM note WHERE note_id = %s
+    """, (note_id,))
+    original = cur.fetchone()
+    
+    if not original:
+        cur.close()
+        return jsonify({'error': 'Note not found'}), 404
+    
+    # Create duplicate
+    new_title = f"{original[0]} (Copy)" if original[0] else "Untitled Note (Copy)"
+    cur.execute("""
+        INSERT INTO note (user_id, title, content, is_public, category_id, notebook_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (user_id, new_title, original[1], original[2], original[3], original[4]))
+    
+    new_note_id = cur.lastrowid
+    
+    # Copy tags
+    cur.execute("""
+        SELECT tag_id FROM note_tag WHERE note_id = %s
+    """, (note_id,))
+    tags = cur.fetchall()
+    for tag_row in tags:
+        cur.execute("INSERT INTO note_tag (note_id, tag_id) VALUES (%s, %s)", (new_note_id, tag_row[0]))
+    
+    mysql.connection.commit()
+    cur.close()
+    
+    return jsonify({'note_id': new_note_id, 'message': 'Note duplicated successfully'})
+
+@app.route('/api/notes/<int:note_id>/statistics')
+def get_note_statistics(note_id):
+    """Get note statistics (word count, reading time, etc.)"""
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT title, content FROM note WHERE note_id = %s", (note_id,))
+    note = cur.fetchone()
+    cur.close()
+    
+    if not note:
+        return jsonify({'error': 'Note not found'}), 404
+    
+    title = note[0] or ''
+    content = note[1] or ''
+    full_text = f"{title} {content}"
+    
+    # Calculate statistics
+    word_count = len(full_text.split())
+    char_count = len(full_text)
+    char_count_no_spaces = len(full_text.replace(' ', ''))
+    
+    # Reading time (average 200 words per minute)
+    reading_time_minutes = max(1, round(word_count / 200))
+    
+    # Paragraph count
+    paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+    paragraph_count = len(paragraphs)
+    
+    # Line count
+    line_count = len(content.split('\n'))
+    
+    return jsonify({
+        'word_count': word_count,
+        'character_count': char_count,
+        'character_count_no_spaces': char_count_no_spaces,
+        'reading_time_minutes': reading_time_minutes,
+        'paragraph_count': paragraph_count,
+        'line_count': line_count
+    })
+
+@app.route('/api/activity')
+def get_activity_feed():
+    """Get recent activity feed"""
+    user_id = get_current_user()
+    limit = int(request.args.get('limit', 20))
+    
+    cur = mysql.connection.cursor()
+    
+    # Get recent note updates
+    cur.execute("""
+        SELECT n.note_id, n.title, n.updated_at, u.name as user_name,
+               'note_updated' as activity_type
+        FROM note n
+        JOIN app_user u ON n.user_id = u.user_id
+        WHERE n.user_id = %s
+        ORDER BY n.updated_at DESC
+        LIMIT %s
+    """, (user_id, limit))
+    
+    activities = []
+    for row in cur.fetchall():
+        activities.append({
+            'type': row[4],
+            'note_id': row[0],
+            'title': row[1],
+            'timestamp': row[2].strftime('%Y-%m-%d %H:%M:%S'),
+            'user': row[3],
+            'description': f"Updated note: {row[1]}"
+        })
+    
+    # Get recent reminders
+    cur.execute("""
+        SELECT r.reminder_id, r.reminder_text, r.due_date, r.status, n.title, n.note_id
+        FROM reminder r
+        JOIN note n ON r.note_id = n.note_id
+        WHERE r.user_id = %s
+        ORDER BY r.due_date DESC
+        LIMIT 10
+    """, (user_id,))
+    
+    for row in cur.fetchall():
+        activities.append({
+            'type': 'reminder',
+            'reminder_id': row[0],
+            'note_id': row[5],
+            'title': row[4],
+            'timestamp': row[2].strftime('%Y-%m-%d %H:%M:%S'),
+            'status': row[3],
+            'description': f"Reminder: {row[1]}"
+        })
+    
+    # Sort by timestamp
+    activities.sort(key=lambda x: x['timestamp'], reverse=True)
+    activities = activities[:limit]
+    
+    cur.close()
+    
+    return jsonify(activities)
+
+@app.route('/api/templates')
+def get_note_templates():
+    """Get available note templates"""
+    templates = [
+        {
+            'id': 'meeting',
+            'name': 'Meeting Notes',
+            'title': 'Meeting Notes - {date}',
+            'content': '''# Meeting Notes
+
+**Date:** {date}
+**Attendees:** 
+**Agenda:**
+- 
+
+**Discussion Points:**
+- 
+
+**Action Items:**
+- [ ] 
+- [ ] 
+
+**Next Steps:**
+- 
+'''
+        },
+        {
+            'id': 'todo',
+            'name': 'To-Do List',
+            'title': 'To-Do List - {date}',
+            'content': '''# To-Do List
+
+**Priority Tasks:**
+- [ ] 
+- [ ] 
+
+**Regular Tasks:**
+- [ ] 
+- [ ] 
+
+**Completed:**
+- [x] 
+'''
+        },
+        {
+            'id': 'project',
+            'name': 'Project Plan',
+            'title': 'Project: {project_name}',
+            'content': '''# Project Plan
+
+**Project Name:** {project_name}
+**Start Date:** {date}
+**Status:** Planning
+
+## Overview
+
+
+## Goals
+- 
+- 
+
+## Tasks
+- [ ] 
+- [ ] 
+
+## Timeline
+- 
+
+## Resources
+- 
+
+## Notes
+
+'''
+        },
+        {
+            'id': 'journal',
+            'name': 'Journal Entry',
+            'title': 'Journal - {date}',
+            'content': '''# Journal Entry
+
+**Date:** {date}
+**Mood:** 
+
+## Today's Highlights
+
+
+## Thoughts & Reflections
+
+
+## Gratitude
+- 
+- 
+
+## Tomorrow's Focus
+- 
+'''
+        },
+        {
+            'id': 'study',
+            'name': 'Study Notes',
+            'title': 'Study Notes - {topic}',
+            'content': '''# Study Notes
+
+**Topic:** {topic}
+**Date:** {date}
+**Subject:** 
+
+## Key Concepts
+
+
+## Important Points
+- 
+- 
+
+## Examples
+
+
+## Questions to Review
+- 
+- 
+
+## Summary
+
+'''
+        }
+    ]
+    
+    return jsonify(templates)
+
+@app.route('/api/templates/<template_id>')
+def get_note_template(template_id):
+    """Get a specific note template"""
+    templates = {
+        'meeting': {
+            'id': 'meeting',
+            'name': 'Meeting Notes',
+            'title': f'Meeting Notes - {datetime.now().strftime("%Y-%m-%d")}',
+            'content': f'''# Meeting Notes
+
+**Date:** {datetime.now().strftime("%Y-%m-%d")}
+**Attendees:** 
+**Agenda:**
+- 
+
+**Discussion Points:**
+- 
+
+**Action Items:**
+- [ ] 
+- [ ] 
+
+**Next Steps:**
+- 
+'''
+        },
+        'todo': {
+            'id': 'todo',
+            'name': 'To-Do List',
+            'title': f'To-Do List - {datetime.now().strftime("%Y-%m-%d")}',
+            'content': f'''# To-Do List
+
+**Priority Tasks:**
+- [ ] 
+- [ ] 
+
+**Regular Tasks:**
+- [ ] 
+- [ ] 
+
+**Completed:**
+- [x] 
+'''
+        },
+        'project': {
+            'id': 'project',
+            'name': 'Project Plan',
+            'title': 'Project: New Project',
+            'content': f'''# Project Plan
+
+**Project Name:** New Project
+**Start Date:** {datetime.now().strftime("%Y-%m-%d")}
+**Status:** Planning
+
+## Overview
+
+
+## Goals
+- 
+- 
+
+## Tasks
+- [ ] 
+- [ ] 
+
+## Timeline
+- 
+
+## Resources
+- 
+
+## Notes
+
+'''
+        },
+        'journal': {
+            'id': 'journal',
+            'name': 'Journal Entry',
+            'title': f'Journal - {datetime.now().strftime("%Y-%m-%d")}',
+            'content': f'''# Journal Entry
+
+**Date:** {datetime.now().strftime("%Y-%m-%d")}
+**Mood:** 
+
+## Today's Highlights
+
+
+## Thoughts & Reflections
+
+
+## Gratitude
+- 
+- 
+
+## Tomorrow's Focus
+- 
+'''
+        },
+        'study': {
+            'id': 'study',
+            'name': 'Study Notes',
+            'title': 'Study Notes - Topic',
+            'content': f'''# Study Notes
+
+**Topic:** Topic
+**Date:** {datetime.now().strftime("%Y-%m-%d")}
+**Subject:** 
+
+## Key Concepts
+
+
+## Important Points
+- 
+- 
+
+## Examples
+
+
+## Questions to Review
+- 
+- 
+
+## Summary
+
+'''
+        }
+    }
+    
+    if template_id not in templates:
+        return jsonify({'error': 'Template not found'}), 404
+    
+    return jsonify(templates[template_id])
+
 # ========== AI CHATBOT ENDPOINT ==========
 @app.route('/api/chatbot', methods=['POST'])
 def chatbot():

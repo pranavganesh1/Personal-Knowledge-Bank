@@ -73,6 +73,46 @@
             display: flex;
             gap: 15px;
             align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search-container {
+            position: relative;
+            flex: 1;
+            max-width: 400px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 10px 40px 10px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .search-icon {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            pointer-events: none;
+        }
+
+        .search-results-info {
+            margin: 15px 0;
+            color: var(--text-secondary);
+            font-size: 14px;
         }
 
         .user-selector {
@@ -615,6 +655,10 @@
         <div class="header-content">
             <div class="logo">📚 Knowledge Base Pro</div>
             <div class="header-actions">
+                <div class="search-container">
+                    <input type="text" class="search-input" id="searchInput" placeholder="🔍 Search notes..." onkeyup="handleSearch(event)">
+                    <span class="search-icon">🔍</span>
+                </div>
                 <select class="user-selector" id="userSelector" onchange="switchUser()">
                     <option value="">Loading users...</option>
                 </select>
@@ -655,10 +699,12 @@
             <button class="tab" onclick="switchTab('notebooks', event)">📒 Notebooks</button>
             <button class="tab" onclick="switchTab('bookmarks', event)">⭐ Bookmarks</button>
             <button class="tab" onclick="switchTab('reminders', event)">⏰ Reminders</button>
+            <button class="tab" onclick="switchTab('activity', event)">📊 Activity</button>
         </div>
 
         <!-- Content Areas -->
         <div id="notesContent">
+            <div class="search-results-info" id="searchResultsInfo" style="display: none;"></div>
             <div class="notes-grid" id="notesGrid"></div>
         </div>
 
@@ -691,6 +737,10 @@
                 </div>
             </div>
         </div>
+
+        <div id="activityContent" style="display: none;">
+            <div class="reminder-list" id="activityList"></div>
+        </div>
     </div>
 
     <!-- Note Modal -->
@@ -701,6 +751,17 @@
                 <button class="close-btn" onclick="closeNoteModal()">&times;</button>
             </div>
             <form id="noteForm">
+                <div class="form-group">
+                    <label class="form-label">Template (Optional)</label>
+                    <select class="form-select" id="noteTemplate" onchange="loadTemplate()">
+                        <option value="">No Template</option>
+                        <option value="meeting">📝 Meeting Notes</option>
+                        <option value="todo">✅ To-Do List</option>
+                        <option value="project">📋 Project Plan</option>
+                        <option value="journal">📔 Journal Entry</option>
+                        <option value="study">📚 Study Notes</option>
+                    </select>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Title</label>
                     <input type="text" class="form-input" id="noteTitle" required>
@@ -750,7 +811,26 @@
                 <button class="close-btn" onclick="closeDetailsModal()">&times;</button>
             </div>
             
+            <!-- Note Actions -->
+            <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="exportNote(viewingNoteId)" id="exportBtn">
+                    📥 Export to Markdown
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="duplicateNote(viewingNoteId)" id="duplicateBtn">
+                    📋 Duplicate Note
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="showNoteStatistics(viewingNoteId)" id="statsBtn">
+                    📊 Statistics
+                </button>
+            </div>
+            
             <div id="noteDetailsContent"></div>
+
+            <!-- Note Statistics Section -->
+            <div class="section" id="noteStatisticsSection" style="display: none;">
+                <div class="section-title">📊 Note Statistics</div>
+                <div id="noteStatisticsContent"></div>
+            </div>
 
             <!-- Version History Section -->
             <div class="section">
@@ -900,17 +980,25 @@
         function switchTab(tab, event) {
             currentTab = tab;
             if (event) activateTabButton(tab);
-            showOnly(tab === 'notes' ? 'notesContent' : tab === 'bookmarks' ? 'bookmarksContent' : tab === 'reminders' ? 'remindersContent' : 'notebooksContent');
+            const contentMapping = {
+                'notes': 'notesContent',
+                'bookmarks': 'bookmarksContent',
+                'reminders': 'remindersContent',
+                'notebooks': 'notebooksContent',
+                'activity': 'activityContent'
+            };
+            showOnly(contentMapping[tab] || 'notesContent');
 
             if (tab === 'notes') loadNotes();
             else if (tab === 'bookmarks') loadBookmarks();
             else if (tab === 'reminders') loadReminders();
             else if (tab === 'notebooks') loadNotebooksList(true);
+            else if (tab === 'activity') loadActivityFeed();
         }
 
         function activateTabButton(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            const mapping = { notes: 0, notebooks: 1, bookmarks: 2, reminders: 3 };
+            const mapping = { notes: 0, notebooks: 1, bookmarks: 2, reminders: 3, activity: 4 };
             const tabs = document.querySelectorAll('.tab');
             if (tabs[mapping[tab]]) tabs[mapping[tab]].classList.add('active');
         }
@@ -920,6 +1008,7 @@
             document.getElementById('bookmarksContent').style.display = 'none';
             document.getElementById('remindersContent').style.display = 'none';
             document.getElementById('notebooksContent').style.display = 'none';
+            document.getElementById('activityContent').style.display = 'none';
             document.getElementById(contentId).style.display = 'block';
         }
 
@@ -1013,6 +1102,7 @@
 
         function closeDetailsModal() {
             document.getElementById('noteDetailsModal').classList.remove('active');
+            document.getElementById('noteStatisticsSection').style.display = 'none';
             viewingNoteId = null;
         }
 
@@ -1636,7 +1726,230 @@
                     }
                 });
             }
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                // Ctrl/Cmd + K: Focus search
+                if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                    e.preventDefault();
+                    document.getElementById('searchInput').focus();
+                }
+                // Ctrl/Cmd + N: New note
+                if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+                    e.preventDefault();
+                    openNoteModal();
+                }
+                // Escape: Close modals
+                if (e.key === 'Escape') {
+                    closeNoteModal();
+                    closeDetailsModal();
+                    const chatbotModal = document.getElementById('chatbotModal');
+                    if (chatbotModal && chatbotModal.classList.contains('active')) {
+                        toggleChatbot();
+                    }
+                }
+            });
         });
+
+        // ========== NEW FEATURES: Search, Export, Duplicate, Statistics, Activity, Templates ==========
+
+        // Search functionality
+        let searchTimeout;
+        async function handleSearch(event) {
+            const query = event.target.value.trim();
+            clearTimeout(searchTimeout);
+            
+            if (query.length === 0) {
+                document.getElementById('searchResultsInfo').style.display = 'none';
+                loadNotes();
+                return;
+            }
+
+            // Debounce search
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/notes/search?q=${encodeURIComponent(query)}`);
+                    const notes = await response.json();
+                    
+                    const grid = document.getElementById('notesGrid');
+                    grid.innerHTML = '';
+                    
+                    const infoDiv = document.getElementById('searchResultsInfo');
+                    infoDiv.style.display = 'block';
+                    infoDiv.textContent = `Found ${notes.length} note(s) matching "${query}"`;
+                    
+                    if (notes.length === 0) {
+                        grid.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No notes found matching your search.</div>';
+                    } else {
+                        grid.innerHTML = notes.map(renderNoteCard).join('');
+                    }
+                } catch (error) {
+                    console.error('Search error:', error);
+                }
+            }, 300);
+        }
+
+        // Export note to Markdown
+        async function exportNote(noteId) {
+            if (!noteId) {
+                alert('No note selected');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/notes/${noteId}/export`);
+                const data = await response.json();
+                
+                // Create download link
+                const blob = new Blob([data.markdown], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = data.filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                alert('✓ Note exported successfully!');
+            } catch (error) {
+                console.error('Export error:', error);
+                alert('Error exporting note: ' + error.message);
+            }
+        }
+
+        // Duplicate note
+        async function duplicateNote(noteId) {
+            if (!noteId) {
+                alert('No note selected');
+                return;
+            }
+
+            if (!confirm('Duplicate this note?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/notes/${noteId}/duplicate`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('✓ Note duplicated successfully!');
+                    loadNotes();
+                    loadStats();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Duplicate error:', error);
+                alert('Error duplicating note: ' + error.message);
+            }
+        }
+
+        // Show note statistics
+        async function showNoteStatistics(noteId) {
+            if (!noteId) {
+                alert('No note selected');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/notes/${noteId}/statistics`);
+                const stats = await response.json();
+                
+                const section = document.getElementById('noteStatisticsSection');
+                const content = document.getElementById('noteStatisticsContent');
+                
+                content.innerHTML = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px;">
+                        <div style="background: var(--bg-dark); padding: 15px; border-radius: 10px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${stats.word_count}</div>
+                            <div style="color: var(--text-secondary); font-size: 12px; margin-top: 5px;">Words</div>
+                        </div>
+                        <div style="background: var(--bg-dark); padding: 15px; border-radius: 10px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${stats.character_count}</div>
+                            <div style="color: var(--text-secondary); font-size: 12px; margin-top: 5px;">Characters</div>
+                        </div>
+                        <div style="background: var(--bg-dark); padding: 15px; border-radius: 10px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${stats.reading_time_minutes}</div>
+                            <div style="color: var(--text-secondary); font-size: 12px; margin-top: 5px;">Min Read</div>
+                        </div>
+                        <div style="background: var(--bg-dark); padding: 15px; border-radius: 10px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${stats.paragraph_count}</div>
+                            <div style="color: var(--text-secondary); font-size: 12px; margin-top: 5px;">Paragraphs</div>
+                        </div>
+                        <div style="background: var(--bg-dark); padding: 15px; border-radius: 10px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${stats.line_count}</div>
+                            <div style="color: var(--text-secondary); font-size: 12px; margin-top: 5px;">Lines</div>
+                        </div>
+                    </div>
+                `;
+                
+                section.style.display = 'block';
+                section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } catch (error) {
+                console.error('Statistics error:', error);
+                alert('Error loading statistics: ' + error.message);
+            }
+        }
+
+        // Load activity feed
+        async function loadActivityFeed() {
+            try {
+                const response = await fetch('/api/activity?limit=20');
+                const activities = await response.json();
+                
+                const list = document.getElementById('activityList');
+                list.innerHTML = '';
+                
+                if (activities.length === 0) {
+                    list.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No recent activity.</div>';
+                    return;
+                }
+                
+                activities.forEach(activity => {
+                    const item = document.createElement('div');
+                    item.className = 'list-item';
+                    
+                    const icon = activity.type === 'reminder' ? '⏰' : '📝';
+                    const statusBadge = activity.status ? `<span class="badge">${activity.status}</span>` : '';
+                    
+                    item.innerHTML = `
+                        <div class="list-item-info">
+                            <h4>${icon} ${activity.description || activity.title}</h4>
+                            <p>${activity.timestamp} ${statusBadge}</p>
+                        </div>
+                        ${activity.note_id ? `<button class="btn btn-sm btn-secondary" onclick="viewNoteDetails(${activity.note_id})">View Note</button>` : ''}
+                    `;
+                    
+                    list.appendChild(item);
+                });
+            } catch (error) {
+                console.error('Activity feed error:', error);
+                document.getElementById('activityList').innerHTML = '<div style="text-align: center; padding: 40px; color: var(--danger);">Error loading activity feed.</div>';
+            }
+        }
+
+        // Load note template
+        async function loadTemplate() {
+            const templateId = document.getElementById('noteTemplate').value;
+            if (!templateId) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/templates/${templateId}`);
+                const template = await response.json();
+                
+                document.getElementById('noteTitle').value = template.title || '';
+                document.getElementById('noteContent').value = template.content || '';
+            } catch (error) {
+                console.error('Template loading error:', error);
+                alert('Error loading template: ' + error.message);
+            }
+        }
     </script>
 </body>
 </html>
